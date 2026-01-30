@@ -58,12 +58,28 @@ window.ensureFirebase = function ensureFirebase() {
     window.fbAuth = firebase.auth();
     window.fbDb = firebase.firestore();
 
+    // Ensure auth session persists on mobile Safari / in-app browsers
+    try {
+      if (window.fbAuth.setPersistence && firebase.auth?.Auth?.Persistence) {
+        window.fbAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
+      }
+    } catch (_) {}
+
     window.fbAuth.onAuthStateChanged((user) => window.updateAuthUI(user));
 
     // Only call redirect result on supported protocols (file:// will throw)
     const p = location.protocol;
     if (p === 'http:' || p === 'https:' || p === 'chrome-extension:') {
-      window.fbAuth.getRedirectResult().catch(console.error);
+      window.fbAuth.getRedirectResult()
+        .then((res) => {
+          // On some mobile browsers, redirect flow needs an explicit result handling to finalize state.
+          if (res && res.user) {
+            try { window.updateAuthUI(res.user); } catch (_) {}
+            try { window.setAuthStatus('登录成功'); } catch (_) {}
+            try { window.closeAuth && window.closeAuth(); } catch (_) {}
+          }
+        })
+        .catch(console.error);
     }
 
     return true;
@@ -124,12 +140,18 @@ window.authGoogle = async function authGoogle() {
   try {
     const provider = new firebase.auth.GoogleAuthProvider();
 
-    if (window.isMobileEnv && window.isMobileEnv()) {
-      await window.fbAuth.signInWithRedirect(provider);
-      return;
+    // Prefer popup; fallback to redirect if popup is blocked (common on mobile/in-app browsers)
+    try {
+      await window.fbAuth.signInWithPopup(provider);
+    } catch (e) {
+      const msg = String(e?.message || e || '');
+      // If popup blocked/unsupported, fallback to redirect
+      if (/popup|blocked|cancelled|unsupported|operation-not-supported/i.test(msg)) {
+        await window.fbAuth.signInWithRedirect(provider);
+        return;
+      }
+      throw e;
     }
-
-    await window.fbAuth.signInWithPopup(provider);
     window.setAuthStatus('登录成功');
     window.closeAuth();
   } catch (e) {
@@ -242,50 +264,6 @@ function backupLocalBeforeRestore() {
   }
 }
 
-
-// ---- Cloud restore warm-up helpers (avoid first-time offline) ----
-async function waitForAuthReady(timeoutMs = 3000) {
-  try {
-    if (!window.fbAuth || typeof window.fbAuth.onAuthStateChanged !== 'function') return;
-    // If already have a user, still wait a microtask so internal listeners settle
-    if (window.fbAuth.currentUser) {
-      await Promise.resolve();
-      return;
-    }
-    await new Promise((resolve) => {
-      const t = setTimeout(() => { try { unsub && unsub(); } catch(_) {} resolve(); }, timeoutMs);
-      const unsub = window.fbAuth.onAuthStateChanged(() => {
-        clearTimeout(t);
-        try { unsub && unsub(); } catch(_) {}
-        resolve();
-      });
-    });
-  } catch (_) {}
-}
-
-async function warmFirestore(db, attempts = 2) {
-  if (!db) return;
-  // Some SDKs expose enableNetwork/disableNetwork. Use if present.
-  try { if (typeof db.enableNetwork === 'function') await db.enableNetwork(); } catch (_) {}
-
-  for (let i = 0; i < attempts; i++) {
-    try {
-      // lightweight read to force establishing a connection
-      await db.collection('_ping').doc('_ping').get();
-      return;
-    } catch (e) {
-      const msg = String(e?.message || e || '');
-      // If first call reports offline/unavailable, wait briefly and retry
-      if (i < attempts - 1 && (/offline|unavailable|network/i).test(msg)) {
-        await new Promise(r => setTimeout(r, 250));
-        continue;
-      }
-      return;
-    }
-  }
-}
-// ---- /warm-up helpers ----
-
 async function requireVerifiedEmailForCloud(user, actionLabel = '云端操作') {
   // Only enforce for Email/Password accounts
   const isPasswordUser = user?.providerData?.some(p => p.providerId === 'password');
@@ -396,11 +374,6 @@ window.cloudRestore = async function cloudRestore() {
   if (!(await requireVerifiedEmailForCloud(user, '云端恢复'))) return;
 
   try {
-    // Warm-up: auth/firestore may still be initializing on first run; avoid false 'offline'
-    await waitForAuthReady();
-    try { await user.reload(); } catch (_) {}
-    await warmFirestore(window.fbDb);
-
     const ref = window.fbDb.collection('users').doc(user.uid).collection('calendar').doc('main');
     const snap = await ref.get();
     if (!snap.exists) return window.uiAlert('云端没有备份数据', '无备份');
