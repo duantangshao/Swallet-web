@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Calendar Ultimate (iOS Style)</title>
+
+  <!-- Firebase (Web CDN / compat) -->
+  <!-- ✅ 你要用“登录 + 云端备份/还原”，就必须填下面 JS 里的 firebaseConfig -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
+
+  <style>
+:root{
+  --bg-body:#F2F2F7;
+  --bg-surface:#FFFFFF;
+  --primary:#007AFF;
+  --text-main:#1C1C1E;
+  --text-sub:#8E8E93;
+  --border:#E5E5EA;
+
+  --urgent-bg:#FFECEC; --urgent-border:#FF3B30;
+  --imp-bg:#FFF4E5;    --imp-border:#FF9500;
+
+  --c-blue:#E1F0FF;   --c-blue-t:#004080;
+  --c-green:#E3F9E5;  --c-green-t:#0C511B;
+  --c-red:#FFEBEA;    --c-red-t:#8A1B14;
+  --c-orange:#FFF4D6; --c-orange-t:#7A4F01;
+  --c-purple:#F2E6FF; --c-purple-t:#481A7F;
+  --c-gray:#F2F2F7;   --c-gray-t:#333333;
+
+  --radius-lg:18px;
+  --shadow-card:0 4px 24px rgba(0,0,0,0.06);
+  --font:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;
+
+  --tap:44px;
+}
+
+/* ===== Base ===== */
+*{ box-sizing:border-box; }
+html,body{ height:100%; }
+body{
+  font-family:var(--font);
+  background:var(--bg-body);
+  margin:0;
+  padding:24px;
+  color:var(--text-main);
+  display:flex;
+  gap:20px;
+  height:100vh;
+  overflow:hidden;
+}
+
+button,input,select{
+  font-family:inherit;
+  font-size:inherit;
+}
+button{ -webkit-tap-highlight-color:transparent; }
+
+/* ===== Layout ===== */
+main{
+  flex:1;
+  display:flex;
+  flex-direction:column;
+  background:var(--bg-surface);
+  border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-card);
+  overflow:hidden;
+  min-width:0;
+}
+aside{
+  width:280px;
+  min-width:280px;
+  flex-shrink:0;
+  display:flex;
+  flex-direction:column;
+  gap:16px;
+}
+
+/* ===== Header ===== */
+header{
+  padding:16px 24px;
+  border-bottom:1px solid var(--border);
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:12px;
+}
+.header-nav{
+  display:flex;
+  gap:12px;
+  align-items:center;
+}
+.nav-btn{
+  background:#fff;
+  border:1px solid var(--border);
+  width:32px;height:32px;
+  border-radius:50%;
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  user-select:none;
+  transition:transform .06s ease, background .12s ease;
+}
+.nav-btn:active{ transform:scale(0.98); background:#f7f7fb; }
+
+h1{
+  font-size:1.3rem;
+  font-weight:800;
+  margin:0;
+  width:220px;
+  text-align:center;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.header-right{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.view-controls{
+  background:#EFEFF4;
+  padding:4px;
+  border-radius:10px;
+  display:flex;
+  gap:2px;
+}
+.view-btn{
+  border:none;
+  background:transparent;
+  padding:6px 14px;
+  border-radius:7px;
+  font-size:.85rem;
+  cursor:pointer;
+  font-weight:700;
+  color:#444;
+}
+.view-btn.active{
+  background:#fff;
+  box-shadow:0 2px 5px rgba(0,0,0,0.08);
+  color:#111;
+}
+
+/* ===== Tools Menu ===== */
+#toolsMenu{
+  position:fixed;
+  right:24px;
+  top:76px;
+  width:220px;
+  background:rgba(255,255,255,0.95);
+  border:1px solid rgba(229,229,234,0.95);
+  border-radius:14px;
+  box-shadow:0 22px 60px rgba(0,0,0,0.18);
+  display:none;
+  overflow:hidden;
+  z-index:5500;
+  backdrop-filter:blur(10px);
+}
+.menu-item{
+  width:100%;
+  border:none;
+  background:transparent;
+  padding:12px 14px;
+  text-align:left;
+  font-weight:800;
+  cursor:pointer;
+}
+.menu-item:hover{ background:#F2F2F7; }
+.menu-item:active{ background:#EDEDF3; }
+.menu-sep{
+  height:1px;
+  background: rgba(229,229,234,0.95);
+  margin: 6px 10px;
+}
+.menu-hint{
+  font-size:0.72rem;
+  color:#8E8E93;
+  padding:8px 14px 10px 14px;
+  line-height:1.35;
+}
+
+/* ===== Calendar ===== */
+.calendar-body{
+  flex:1;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+}
+
+/* week header row */
+.week-header{
+  display:grid;
+  grid-template-columns:repeat(7,1fr);
+  padding:12px 0;
+  border-bottom:1px solid var(--border);
+  background:#FAFAFA;
+}
+.week-header div{
+  text-align:center;
+  font-size:.8rem;
+  font-weight:800;
+  color:var(--text-sub);
+}
+
+/* grid */
+.days-grid{
+  flex:1;
+  display:grid;
+  grid-template-columns:repeat(7,1fr);
+  min-height:0;
+}
+.day-cell{
+  border-right:1px solid var(--border);
+  border-bottom:1px solid var(--border);
+  padding:6px;
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  overflow:hidden;
+  min-height:0;
+  background:#fff;
+}
+.days-grid .day-cell:nth-child(7n){ border-right:none; }
+.day-cell.today{ background:rgba(0,122,255,0.05); }
+.day-cell.past-day{ background:rgba(142,142,147,0.06); }
+.day-cell.past-day .date-num{ color:#777; }
+
+.day-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+}
+.date-num{
+  font-weight:900;
+  font-size:.85rem;
+  letter-spacing:.2px;
+}
+
+/* events list inside each cell */
+.events-container{
+  flex:1;
+  overflow:auto;
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  min-height:0;
+  padding-right:2px;
+}
+.event-chip{
+  height:26px;
+  padding:0 8px;
+  border-radius:7px;
+  font-size:.75rem;
+  display:flex;
+  align-items:center;
+  gap:6px;
+  white-space:nowrap;
+  overflow:hidden;
+  cursor:pointer;
+  border:1px solid rgba(0,0,0,0.02);
+}
+.event-chip strong{
+  font-weight:900;
+  margin-right:2px;
+}
+.evt-title{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+/* colors */
+.bg-blue{ background:var(--c-blue); color:var(--c-blue-t); }
+.bg-green{ background:var(--c-green); color:var(--c-green-t); }
+.bg-red{ background:var(--c-red); color:var(--c-red-t); }
+.bg-orange{ background:var(--c-orange); color:var(--c-orange-t); }
+.bg-purple{ background:var(--c-purple); color:var(--c-purple-t); }
+.bg-gray{ background:var(--c-gray); color:var(--c-gray-t); }
+
+.event-chip.is-done{
+  opacity:.52;
+  filter:grayscale(.35);
+}
+
+/* ===== Week Mode tweaks (optional) ===== */
+.calendar-body.week-mode .days-grid{
+  grid-template-columns:repeat(1,1fr);
+}
+.calendar-body.week-mode .week-header{
+  display:none;
+}
+.calendar-body.week-mode .day-cell{
+  border-right:none;
+}
+
+/* ===== Sidebar ===== */
+.search-wrap{ width:100%; }
+.search-wrap .btn{ width:100%; }
+
+.side-module{
+  background:var(--bg-surface);
+  border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-card);
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+  min-height:0;
+}
+.mod-urgent .module-header{
+  background:var(--urgent-bg);
+  color:var(--urgent-border);
+}
+.mod-imp .module-header{
+  background:var(--imp-bg);
+  color:var(--imp-border);
+}
+.mod-today .module-header{
+  background:var(--c-blue);
+  color:var(--c-blue-t);
+}
+.module-header{
+  padding:12px 16px;
+  font-size:.8rem;
+  font-weight:900;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  letter-spacing:.6px;
+  text-transform:uppercase;
+}
+.module-list{
+  padding:12px;
+  overflow:auto;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  min-height:0;
+}
+
+/* Sidebar cards */
+.side-card{
+  background:#fff;
+  border-radius:12px;
+  padding:10px 10px;
+  border-left:4px solid transparent;
+  cursor:pointer;
+  box-shadow:0 2px 10px rgba(0,0,0,0.05);
+  transition:transform .06s ease, box-shadow .12s ease;
+}
+.side-card:hover{
+  transform:translateY(-1px);
+  box-shadow:0 6px 18px rgba(0,0,0,0.08);
+}
+.mod-urgent .side-card{ border-left-color:var(--urgent-border); }
+.mod-imp .side-card{ border-left-color:var(--imp-border); }
+.mod-today .side-card{ border-left-color:var(--primary); }
+
+.sc-row{
+  display:flex;
+  justify-content:space-between;
+  gap:10px;
+  align-items:center;
+}
+.sc-title{
+  font-weight:800;
+  font-size:.86rem;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.sc-time{
+  font-size:.75rem;
+  font-weight:900;
+  color:var(--primary);
+  flex-shrink:0;
+}
+.sc-date{
+  font-size:.72rem;
+  color:#8b8b90;
+  margin-top:4px;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+/* ===== Modal ===== */
+.modal-overlay{
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,0.32);
+  display:none;
+  justify-content:center;
+  align-items:center;
+  z-index:2000;
+  backdrop-filter:blur(3px);
+}
+
+.modal{
+  background:#fff;
+  border-radius:24px;
+  width:420px;
+  max-height:85vh;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+  box-shadow:0 25px 70px rgba(0,0,0,0.22);
+  border:1px solid rgba(229,229,234,0.9);
+}
+
+.modal-inner{
+  padding:22px;
+  overflow:auto;
+}
+
+.modal-inner h2{
+  margin:0 0 14px 0;
+  font-weight:900;
+}
+
+.modal-btns{
+  padding:14px 22px;
+  border-top:1px solid var(--border);
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:12px;
+}
+
+/* ===== Form ===== */
+.form-group{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  margin:12px 0;
+}
+.form-group label{
+  font-size:.78rem;
+  font-weight:900;
+  color:#555;
+  letter-spacing:.2px;
+}
+.form-group input[type="text"],
+.form-group input[type="email"],
+.form-group input[type="password"],
+.form-group select{
+  height:44px;
+  border-radius:12px;
+  border:1px solid var(--border);
+  background:#fff;
+  padding:0 12px;
+  font-weight:700;
+  outline:none;
+}
+.form-group input:focus,
+.form-group select:focus{
+  border-color:rgba(0,122,255,0.5);
+  box-shadow:0 0 0 3px rgba(0,122,255,0.12);
+}
+
+/* grid for inputs */
+.form-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+}
+
+/* ===== Priority segmented ===== */
+.prio-seg{
+  display:flex;
+  background:#EFEFF4;
+  border-radius:12px;
+  padding:4px;
+  gap:4px;
+}
+.prio-opt{
+  flex:1;
+  text-align:center;
+  padding:10px 8px;
+  border-radius:10px;
+  font-weight:900;
+  font-size:.82rem;
+  cursor:pointer;
+  user-select:none;
+  color:#444;
+  background:transparent;
+}
+.prio-opt.selected{
+  background:#fff;
+  box-shadow:0 2px 8px rgba(0,0,0,0.08);
+}
+.prio-opt.selected.p-urgent{ color:var(--urgent-border); }
+.prio-opt.selected.p-imp{ color:var(--imp-border); }
+.prio-opt.selected.p-norm{ color:#222; }
+.prio-opt.selected.p-done{ color:#777; }
+
+/* ===== Color picker row ===== */
+.color-row{
+  display:flex;
+  gap:10px;
+  align-items:center;
+  flex-wrap:wrap;
+}
+.c-circle{
+  width:26px;height:26px;
+  border-radius:50%;
+  cursor:pointer;
+  border:2px solid rgba(0,0,0,0.06);
+  box-shadow:0 2px 10px rgba(0,0,0,0.06);
+}
+.c-circle.selected{
+  outline:3px solid rgba(0,122,255,0.22);
+  border-color:rgba(0,122,255,0.35);
+}
+
+/* ===== Emoji grid ===== */
+.emoji-grid{
+  display:grid;
+  grid-template-columns:repeat(8, 1fr);
+  gap:8px;
+}
+.emoji-item{
+  height:36px;
+  border-radius:12px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  background:#F2F2F7;
+  font-size:18px;
+  user-select:none;
+}
+.emoji-item:hover{ background:#EDEDF3; }
+.emoji-item.selected{
+  background:#fff;
+  box-shadow:0 2px 12px rgba(0,0,0,0.10);
+  border:1px solid rgba(0,122,255,0.25);
+}
+
+/* ===== Buttons ===== */
+.btn{
+  padding:10px 18px;
+  border-radius:12px;
+  font-weight:900;
+  border:none;
+  cursor:pointer;
+}
+.btn-save{ background:var(--primary); color:#fff; }
+.btn-cancel{ background:#F2F2F7; color:#444; }
+.btn-del{ background:rgba(255,59,48,0.12); color:#FF3B30; }
+.btn:active{ transform:scale(0.99); }
+
+/* ===== Tooltip ===== */
+#tooltip{
+  position:fixed;
+  background:#fff;
+  padding:10px 12px;
+  border-radius:12px;
+  box-shadow:0 10px 36px rgba(0,0,0,0.20);
+  font-size:.76rem;
+  display:none;
+  z-index:3000;
+  max-width:240px;
+}
+#tooltip h4{
+  margin:0 0 6px 0;
+  font-size:.86rem;
+  font-weight:900;
+}
+#tooltip p{
+  margin:4px 0;
+  color:#444;
+}
+
+/* ===== Search results container ===== */
+.search-results{
+  max-height:44vh;
+  overflow:auto;
+  padding-right:2px;
+}
+
+/* ===== iOS Time Picker ===== */
+.picker-overlay{
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,0.35);
+  display:none;
+  align-items:flex-end;
+  justify-content:center;
+  z-index:5000;
+  backdrop-filter:blur(3px);
+}
+.picker-sheet{
+  width:min(520px, 100vw);
+  background:rgba(255,255,255,0.92);
+  border-top-left-radius:18px;
+  border-top-right-radius:18px;
+  box-shadow:0 -18px 60px rgba(0,0,0,0.20);
+  border:1px solid rgba(229,229,234,0.9);
+  overflow:hidden;
+}
+.picker-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:12px 14px;
+  border-bottom:1px solid rgba(229,229,234,0.8);
+}
+.picker-btn-close,
+.picker-btn-done{
+  border:none;
+  background:transparent;
+  font-weight:900;
+  cursor:pointer;
+  padding:8px 10px;
+  border-radius:10px;
+}
+.picker-btn-done{ color:var(--primary); }
+.picker-btn-close{ color:#555; }
+
+.picker-wheel-container{
+  position:relative;
+  height:260px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:14px;
+  padding:10px 0 18px;
+}
+.picker-highlight{
+  position:absolute;
+  left:12px; right:12px;
+  top:50%;
+  transform:translateY(-50%);
+  height:44px;
+  border-radius:12px;
+  background:rgba(0,122,255,0.10);
+  border:1px solid rgba(0,122,255,0.18);
+  pointer-events:none;
+}
+.picker-col{
+  width:110px;
+  height:220px;
+  overflow-y:auto;
+  scroll-snap-type:y mandatory;
+  -webkit-overflow-scrolling:touch;
+  scrollbar-width:none;
+}
+.picker-col::-webkit-scrollbar{ width:0; height:0; }
+.picker-colon{
+  font-weight:900;
+  font-size:22px;
+  color:#666;
+}
+.picker-item{
+  height:40px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-weight:900;
+  font-size:22px;
+  color:#777;
+  scroll-snap-align:center;
+}
+.picker-item.active{ color:#111; }
+.picker-spacer{ height:40px; }
+
+/* time trigger button inside form */
+.time-trigger-btn{
+  height:44px;
+  width:100%;
+  border-radius:12px;
+  border:1px solid var(--border);
+  background:#fff;
+  cursor:pointer;
+  font-weight:900;
+}
+.time-trigger-btn:active{ background:#F2F2F7; }
+
+/* ===== Misc ===== */
+.past-day .event-chip{ opacity:0.6; }
+
+/* =========================================================
+   📱 Mobile Responsive
+   ========================================================= */
+@media (max-width: 900px){
+  body{
+    flex-direction:column;
+    height:auto;
+    overflow:auto;
+    padding:12px;
+    gap:12px;
+  }
+  aside{
+    width:100%;
+    min-width:0;
+    order:2;
+  }
+  main{
+    width:100%;
+    order:1;
+  }
+  header{
+    padding:12px 14px;
+    flex-wrap:wrap;
+    gap:10px;
+  }
+  h1{
+    width:auto;
+    flex:1;
+    font-size:1.1rem;
+  }
+  .modal{
+    width:calc(100vw - 24px);
+    max-height:90vh;
+  }
+  #toolsMenu{
+    right:12px;
+    top:64px;
+  }
+  .emoji-grid{ grid-template-columns:repeat(10, 1fr); }
+}
+  
+/* ===== iOS-style modal (custom alert/confirm) ===== */
+.ios-modal{position:fixed;inset:0;z-index:99999;font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif}
+.ios-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.35);backdrop-filter:blur(8px)}
+.ios-sheet{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(320px,calc(100vw - 40px));background:rgba(255,255,255,.92);border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,.25);overflow:hidden}
+.ios-title{padding:18px 18px 6px;font-weight:700;font-size:17px;text-align:center;color:#111}
+.ios-msg{padding:0 18px 18px;font-size:14px;line-height:1.45;text-align:center;color:rgba(0,0,0,.72);white-space:pre-line}
+.ios-actions{display:grid;grid-auto-flow:column;border-top:1px solid rgba(0,0,0,.12)}
+.ios-btn{border:0;background:transparent;padding:14px 12px;font-size:17px;cursor:pointer;color:#007AFF}
+.ios-btn + .ios-btn{border-left:1px solid rgba(0,0,0,.12)}
+.ios-btn.destructive{color:#FF3B30}
+.ios-btn.bold{font-weight:700}
+@media (prefers-reduced-transparency: reduce){
+  .ios-sheet{background:#fff}
+  .ios-backdrop{backdrop-filter:none}
+}
+
+</style>
+</head>
+
+<body>
+
+<main>
+  <header>
+    <div class="header-nav">
+      <button class="nav-btn" onclick="nav(-1)">❮</button>
+      <h1 id="headerTitle">...</h1>
+      <button class="nav-btn" onclick="nav(1)">❯</button>
+    </div>
+
+    <div class="header-right">
+      <div class="view-controls">
+        <button class="view-btn active" id="btnMonth" onclick="setView('month')">月</button>
+        <button class="view-btn" id="btnWeek" onclick="setView('week')">週</button>
+      </div>
+      <!-- More menu -->
+      <button class="nav-btn" id="btnMore" onclick="toggleToolsMenu()" title="More">⋯</button>
+    </div>
+  </header>
+
+  <div class="calendar-body" id="calBody">
+    <div class="week-header">
+      <div>日</div><div>月</div><div>火</div><div>水</div><div>木</div><div>金</div><div>土</div>
+    </div>
+    <div class="days-grid" id="grid"></div>
+  </div>
+</main>
+
+<aside>
+  <!-- Search -->
+  <div class="search-wrap">
+    <button class="btn btn-cancel" style="width:100%; border:1px solid #ddd" onclick="openSearch()">
+      🔎 検索
+    </button>
+  </div>
+
+  <!-- Urgent -->
+  <div class="side-module mod-urgent">
+    <div class="module-header">
+      <span>緊急 (Urgent)</span><span>🔥</span>
+    </div>
+    <div class="module-list" id="listUrgent"></div>
+  </div>
+
+  <!-- Important -->
+  <div class="side-module mod-imp">
+    <div class="module-header">
+      <span>重要 (Important)</span><span>⭐️</span>
+    </div>
+    <div class="module-list" id="listImp"></div>
+  </div>
+
+  <!-- Today -->
+  <div class="side-module mod-today">
+    <div class="module-header">
+      <span>今日日程</span><span>📅</span>
+    </div>
+    <div class="module-list" id="listToday"></div>
+  </div>
+</aside>
+
+<!-- Tools Menu -->
+<div id="toolsMenu">
+  <button class="menu-item" onclick="event.stopPropagation(); backupJASO(); hideToolsMenu();">Backup</button>
+  <button class="menu-item" onclick="event.stopPropagation(); triggerImportJASO(); hideToolsMenu();">Import</button>
+
+  <div class="menu-sep"></div>
+
+  <button class="menu-item" onclick="event.stopPropagation(); cloudBackup(); hideToolsMenu();">Cloud Backup</button>
+  <button class="menu-item" onclick="event.stopPropagation(); cloudRestore(); hideToolsMenu();">Cloud Restore</button>
+
+  <div class="menu-sep"></div>
+
+  <button class="menu-item" onclick="event.stopPropagation(); openAuth(); hideToolsMenu();" id="btnLoginMenu">Login</button>
+  <button class="menu-item" onclick="event.stopPropagation(); authLogout(); hideToolsMenu();" id="btnLogoutMenu" style="display:none;">Logout</button>
+
+  <div class="menu-hint" id="authHintLine">未登录（云端备份需登录）</div>
+</div>
+
+<input id="inpJasoFile" type="file" accept=".jaso,application/json" style="display:none" />
+<div id="tooltip"></div>
+
+<!-- Search Modal -->
+<div class="modal-overlay" id="searchModal">
+  <div class="modal" style="width: 420px;">
+    <div class="modal-inner">
+      <h2 style="margin:0 0 16px 0;">検索</h2>
+
+      <div class="form-group">
+        <label>キーワード</label>
+        <input type="text" id="searchQuery" placeholder="タイトル / 場所 を検索" oninput="renderSearchResults()">
+      </div>
+
+      <div class="form-group">
+        <label>結果</label>
+        <div id="searchResults" class="search-results"></div>
+      </div>
+    </div>
+
+    <div class="modal-btns">
+      <button class="btn btn-cancel" onclick="closeSearch()">閉じる</button>
+      <div></div>
+    </div>
+  </div>
+</div>
+
+<!-- Event Edit Modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <div class="modal-inner">
+      <h2 id="modalTitle">予定</h2>
+      <input type="hidden" id="evtId"><input type="hidden" id="evtDate">
+
+      <div class="form-group">
+        <label>タイトル</label>
+        <input type="text" id="inpTitle" placeholder="タイトルを入力">
+      </div>
+
+      <div class="form-grid" id="timeGrid">
+        <div class="form-group" id="grpStart">
+          <label>開始</label>
+          <input type="hidden" id="inpStart">
+          <button type="button" class="time-trigger-btn" id="btnStartDisp" onclick="openTimePicker('inpStart', 'btnStartDisp')">--:--</button>
+        </div>
+        <div class="form-group" id="grpEnd">
+          <label>終了 (+1h)</label>
+          <input type="hidden" id="inpEnd">
+          <button type="button" class="time-trigger-btn" id="btnEndDisp" onclick="openTimePicker('inpEnd', 'btnEndDisp')">--:--</button>
+        </div>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label>終日</label>
+          <div style="display:flex; align-items:center; gap:10px; padding:10px 0;">
+            <input type="checkbox" id="chkAllDay" style="width:18px; height:18px;" onchange="toggleAllDayUI()">
+            <span style="font-weight:600; color:#333;">終日予定</span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>繰り返し</label>
+          <select id="selRepeat" onchange="onRepeatChange()">
+            <option value="none">なし</option>
+            <option value="weekly">毎週</option>
+            <option value="monthly">毎月</option>
+            <option value="yearly">毎年</option>
+          </select>
+          <div id="repeatHint" style="margin-top:6px; font-size:0.75rem; color:#8E8E93; display:none;">
+            ※ 選択すると、開始日から1年間分を自動追加
+          </div>
+        </div>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label>場所</label>
+          <input type="text" id="inpLoc">
+        </div>
+        <div class="form-group">
+          <label>優先度</label>
+          <div class="prio-seg">
+            <div class="prio-opt" onclick="setFormPrio('urgent')" id="po-urgent">緊急</div>
+            <div class="prio-opt" onclick="setFormPrio('imp')" id="po-imp">重要</div>
+            <div class="prio-opt" onclick="setFormPrio('norm')" id="po-norm">普通</div>
+            <div class="prio-opt" onclick="setFormPrio('done')" id="po-done">完了</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>背景色</label>
+        <div class="color-row">
+          <div class="c-circle bg-blue" onclick="setFormColor('bg-blue')" id="co-blue"></div>
+          <div class="c-circle bg-green" onclick="setFormColor('bg-green')" id="co-green"></div>
+          <div class="c-circle bg-orange" onclick="setFormColor('bg-orange')" id="co-orange"></div>
+          <div class="c-circle bg-red" onclick="setFormColor('bg-red')" id="co-red"></div>
+          <div class="c-circle bg-purple" onclick="setFormColor('bg-purple')" id="co-purple"></div>
+          <div class="c-circle bg-gray" onclick="setFormColor('bg-gray')" id="co-gray"></div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>アイコン</label>
+        <div class="emoji-grid" id="emojiContainer"></div>
+      </div>
+    </div>
+
+    <div class="modal-btns">
+      <button class="btn btn-del" id="btnDel" onclick="delEvent()">削除</button>
+      <div style="display:flex; gap:10px">
+        <button class="btn btn-cancel" onclick="closeModal()">キャンセル</button>
+        <button class="btn btn-save" onclick="saveEvent()">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- iOS Style Time Picker Overlay -->
+<div class="picker-overlay" id="timePickerOverlay">
+  <div class="picker-sheet">
+    <div class="picker-header">
+      <button class="picker-btn-close" onclick="closeTimePicker(false)">キャンセル</button>
+      <span style="font-weight:600">時間を選択</span>
+      <button class="picker-btn-done" onclick="closeTimePicker(true)">完了</button>
+    </div>
+    <div class="picker-wheel-container">
+      <div class="picker-highlight"></div>
+
+      <div class="picker-col" id="colHour">
+        <div class="picker-spacer"></div>
+        <div class="picker-spacer"></div>
+      </div>
+
+      <div class="picker-colon">:</div>
+
+      <div class="picker-col" id="colMin">
+        <div class="picker-spacer"></div>
+        <div class="picker-spacer"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Auth Modal (Login/Signup) ===== -->
+<div class="modal-overlay" id="authModal">
+  <div class="modal" style="width:420px;">
+    <div class="modal-inner">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+        <h2 style="margin:0;">ログイン / 登録</h2>
+        <button class="nav-btn" onclick="closeAuth()" title="Close">✕</button>
+      </div>
+
+      <div style="margin-top:14px; display:flex; flex-direction:column; gap:10px;">
+        <button class="btn btn-save" onclick="authGoogle()">Continue with Google</button>
+        <button class="btn btn-cancel" style="border:1px solid #ddd;" onclick="authApple()">Continue with Apple</button>
+      </div>
+
+      <div style="margin:14px 0; display:flex; align-items:center; gap:10px;">
+        <div style="height:1px; background:#E5E5EA; flex:1;"></div>
+        <div style="font-size:0.8rem; color:#8E8E93; font-weight:700;">OR</div>
+        <div style="height:1px; background:#E5E5EA; flex:1;"></div>
+      </div>
+
+      <div class="form-group">
+        <label>Email</label>
+        <input id="authEmail" type="email" placeholder="email@example.com" autocomplete="email" />
+      </div>
+
+      <div class="form-group">
+        <label>Password</label>
+        <input id="authPass" type="password" placeholder="********" autocomplete="current-password" />
+        <div style="margin-top:6px; font-size:0.75rem; color:#8E8E93;">
+          ※ 初回は「登録」、既存なら「ログイン」
+        </div>
+      </div>
+
+      <div style="display:flex; gap:10px; margin-top:10px;">
+        <button class="btn btn-cancel" style="flex:1;" onclick="authEmailLogin()">ログイン</button>
+        <button class="btn btn-save" style="flex:1;" onclick="authEmailSignup()">登録</button>
+      </div>
+
+      <div id="authStatus" style="margin-top:12px; font-size:0.85rem; color:#666;"></div>
+
+      <div style="margin-top:14px; display:flex; justify-content:space-between; align-items:center;">
+        <div id="authUserLine" style="font-size:0.8rem; color:#8E8E93;">未登录</div>
+        <button class="btn btn-del" id="btnLogout" style="display:none;" onclick="authLogout()">Logout</button>
+      </div>
+    </div>
+
+    <div class="modal-btns">
+      <button class="btn btn-cancel" onclick="closeAuth()">閉じる</button>
+      <div></div>
+    </div>
+  </div>
+</div>
+<!-- ===== /Auth Modal ===== -->
+
+<script src="./js/state.js"></script>
+<script src="./js/utils.js"></script>
+<script src="./js/storage.js"></script>
+<script src="./js/picker.js"></script>
+<script src="./js/ui.js"></script>
+<script src="./js/calendar.js"></script>
+<script src="./js/auth.js"></script>
+<script src="./js/main.js"></script>
+
+<!-- ===== Repeat Scope Action Sheet ===== -->
+<div id="scopeSheet" style="
+  position:fixed; inset:0;
+  background:rgba(0,0,0,0.35);
+  backdrop-filter:blur(3px);
+  display:none;
+  align-items:flex-end;
+  justify-content:center;
+  z-index:6000;
+">
+  <div style="
+    width:min(420px, calc(100vw - 24px));
+    margin:0 12px 12px 12px;
+    background:rgba(255,255,255,0.92);
+    border:1px solid rgba(229,229,234,0.9);
+    border-radius:18px;
+    box-shadow:0 25px 60px rgba(0,0,0,0.22);
+    padding:10px;
+  ">
+    <div id="scopeSheetTitle" style="
+      text-align:center;
+      font-weight:800;
+      font-size:0.9rem;
+      color:#666;
+      padding:10px 8px 8px 8px;
+    ">繰り返し予定</div>
+
+    <button id="btnScopeSingle" style="
+      width:100%;
+      border:none;
+      border-radius:14px;
+      padding:14px 12px;
+      font-weight:800;
+      font-size:0.98rem;
+      background:white;
+      color:#1C1C1E;
+      cursor:pointer;
+      margin-top:8px;
+    ">本日程のみ</button>
+
+    <button id="btnScopeFuture" style="
+      width:100%;
+      border:none;
+      border-radius:14px;
+      padding:14px 12px;
+      font-weight:800;
+      font-size:0.98rem;
+      background:white;
+      color:#FF3B30;
+      cursor:pointer;
+      margin-top:8px;
+    ">本日程以降（本日程含む）</button>
+
+    <div style="height:6px;"></div>
+
+    <button id="btnScopeCancel" style="
+      width:100%;
+      border:none;
+      border-radius:14px;
+      padding:14px 12px;
+      font-weight:800;
+      font-size:0.98rem;
+      background:#F2F2F7;
+      color:#444;
+      cursor:pointer;
+      margin-top:8px;
+    ">キャンセル</button>
+  </div>
+</div>
+
+
+
+<!-- iOS-style modal container -->
+<div id="iosModal" class="ios-modal" style="display:none">
+  <div class="ios-backdrop"></div>
+  <div class="ios-sheet" role="dialog" aria-modal="true">
+    <div class="ios-title" id="iosTitle"></div>
+    <div class="ios-msg" id="iosMsg"></div>
+    <div class="ios-actions" id="iosActions"></div>
+  </div>
+</div>
+
+</body>
+</html>
