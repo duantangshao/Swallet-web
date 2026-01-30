@@ -66,7 +66,6 @@ window.ensureFirebase = function ensureFirebase() {
     try {
       if (window.fbDb && typeof window.fbDb.settings === 'function') {
         window.fbDb.settings({
-          experimentalForceLongPolling: true,
           experimentalAutoDetectLongPolling: true,
           useFetchStreams: false
         });
@@ -325,6 +324,26 @@ async function warmFirestore(db, attempts = 3) {
 }
 // ---- /Warm-up helpers ----
 
+async function withFirestoreRetry(fn, retries = 3) {
+  let lastErr = null;
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn(i);
+    } catch (e) {
+      lastErr = e;
+      const msg = String(e?.message || e || '');
+      // Retry only on offline/unavailable/network-ish errors
+      if (i < retries - 1 && (/offline|unavailable|network|timeout/i).test(msg)) {
+        await new Promise(r => setTimeout(r, 350 * (i + 1)));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr;
+}
+
+
 async function requireVerifiedEmailForCloud(user, actionLabel = '云端操作') {
   const isPasswordUser = user?.providerData?.some(p => p.providerId === 'password');
   if (!isPasswordUser) return true;
@@ -410,18 +429,14 @@ window.cloudBackup = async function cloudBackup() {
     await waitForAuthReady();
     try { await user.reload(); } catch (_) {}
     const warm = await warmFirestore(window.fbDb);
-    if (!warm.ok) {
-      await window.uiAlert('网络尚未就绪（Firestore offline）。\n\n请检查网络后重试。\n\n' + (warm.lastErr?.message || ''), '暂时无法备份');
-      return;
-    }
-
-    const ref = userDocRef(user);
+    // warm-up is best-effort; do not block main operation
+const ref = userDocRef(user);
     const events = normalizeEvents(window.state?.events);
 
     // Prevent accidental overwrite: compare with cloud first
     let cloudInfo = null;
     try {
-      const snap = await ref.get();
+      const snap = await withFirestoreRetry(() => ref.get(), 3);
       if (snap.exists) {
         const data = snap.data() || {};
         cloudInfo = {
@@ -451,7 +466,7 @@ window.cloudBackup = async function cloudBackup() {
       events
     };
 
-    await ref.set(payload);
+    await withFirestoreRetry(() => ref.set(payload), 3);
     await window.uiAlert(`Cloud Backup 成功 ✅（${events.length} 件）`, '备份成功');
   } catch (e) {
     console.error(e);
@@ -471,16 +486,9 @@ window.cloudRestore = async function cloudRestore() {
     await waitForAuthReady();
     try { await user.reload(); } catch (_) {}
     const warm = await warmFirestore(window.fbDb);
-    if (!warm.ok) {
-      await window.uiAlert(
-        '网络尚未就绪（Firestore offline）。\n\n请检查网络后重试。\n\n' + (warm.lastErr?.message || ''),
-        '暂时无法恢复'
-      );
-      return;
-    }
-
-    const ref = userDocRef(user);
-    const snap = await ref.get();
+    // warm-up is best-effort; do not block main operation
+const ref = userDocRef(user);
+    const snap = await withFirestoreRetry(() => ref.get(), 3);
     if (!snap.exists) return window.uiAlert('云端没有备份数据', '无备份');
 
     const data = snap.data() || {};
