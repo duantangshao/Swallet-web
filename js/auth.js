@@ -61,6 +61,21 @@ window.ensureFirebase = function ensureFirebase() {
     window.fbAuth = firebase.auth();
     window.fbDb = firebase.firestore();
 
+    // --- Firestore network compatibility (fix "client is offline" behind proxies/iOS) ---
+    // Force long-polling when WebChannel/WebSocket is blocked (common on some mobile networks / corporate Wi‑Fi)
+    try {
+      if (window.fbDb && typeof window.fbDb.settings === 'function') {
+        window.fbDb.settings({
+          experimentalForceLongPolling: true,
+          experimentalAutoDetectLongPolling: true,
+          useFetchStreams: false
+        });
+      }
+    } catch (e) {
+      console.warn('Firestore settings() failed:', e);
+    }
+    // ------------------------------------------------------------------------------
+
     // --- IMPORTANT: persist auth session (mobile Safari / in-app browsers) ---
     try {
       if (window.fbAuth.setPersistence && firebase.auth?.Auth?.Persistence) {
