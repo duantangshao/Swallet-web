@@ -61,6 +61,20 @@ window.ensureFirebase = function ensureFirebase() {
     window.fbAuth = firebase.auth();
     window.fbDb = firebase.firestore();
 
+    // --- Firestore transport hardening (must run BEFORE any Firestore calls) ---
+    // Desktop home Wi‑Fi can still have flaky HTTP/2/WebChannel; let SDK auto-detect long polling.
+    // NOTE: settings() only works before Firestore is started; call immediately after firestore() and only once.
+    try {
+      if (!window.__firestoreSettingsApplied && window.fbDb && typeof window.fbDb.settings === 'function') {
+        window.fbDb.settings({ experimentalAutoDetectLongPolling: true });
+        window.__firestoreSettingsApplied = true;
+      }
+    } catch (e) {
+      // If Firestore already started, settings can't be changed. That's OK.
+      console.warn('Firestore settings skipped:', e);
+    }
+    // ---------------------------------------------------------------
+
     // --- Firestore network compatibility (fix "client is offline" behind proxies/iOS) ---
     // Force long-polling when WebChannel/WebSocket is blocked (common on some mobile networks / corporate Wi‑Fi)
     try {
@@ -322,6 +336,54 @@ async function warmFirestore(db, attempts = 3) {
   }
   return { ok: false, lastErr };
 }
+
+// --- Robust Firestore operation with retry/reset (fix intermittent 'client is offline') ---
+async function resetFirestoreNetwork(db) {
+  try { if (db && typeof db.disableNetwork === 'function') await db.disableNetwork(); } catch (_) {}
+  try { if (db && typeof db.enableNetwork === 'function') await db.enableNetwork(); } catch (_) {}
+}
+
+async function getDocWithRetry(ref, db, retries = 5) {
+  let lastErr = null;
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await ref.get();
+    } catch (e) {
+      lastErr = e;
+      const msg = String(e?.message || e || '');
+      const offlineish = (/offline|unavailable|network/i).test(msg);
+      if (offlineish && i < retries - 1) {
+        // Reset network state and backoff
+        await resetFirestoreNetwork(db);
+        await new Promise(r => setTimeout(r, 350 + i * 400));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr;
+}
+
+async function setDocWithRetry(ref, payload, db, retries = 5) {
+  let lastErr = null;
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await setDocWithRetry(ref, payload, window.fbDb);
+    } catch (e) {
+      lastErr = e;
+      const msg = String(e?.message || e || '');
+      const offlineish = (/offline|unavailable|network/i).test(msg);
+      if (offlineish && i < retries - 1) {
+        await resetFirestoreNetwork(db);
+        await new Promise(r => setTimeout(r, 350 + i * 400));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr;
+}
+// --- /retry helpers ---
 // ---- /Warm-up helpers ----
 
 async function withFirestoreRetry(fn, retries = 3) {
