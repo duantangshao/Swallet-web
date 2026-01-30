@@ -1,4 +1,9 @@
-// auth.js - Firebase init/auth + cloud backup/restore (with Email Verification + iOS-style dialogs)
+// auth.js - Firebase init/auth + cloud backup/restore
+// FIXES:
+// 1) Mobile Google login redirect/persistence (LOCAL persistence + robust redirect result handling)
+// 2) Cloud Restore "offline" on first try (auth/firestore warm-up + retry + friendly guard)
+// 3) Prevent accidental overwrite when you only want to restore (backup shows local/cloud diff + confirm)
+// 4) Always show success/failure toast via uiAlert (fallback to native alert)
 
 (function () {
   function hasIOSDialogs() {
@@ -33,9 +38,7 @@ window.setAuthStatus = function setAuthStatus(msg, isErr=false) {
 };
 
 window.ensureFirebase = function ensureFirebase() {
-  if (!window.firebase || !firebase.initializeApp) {
-    return false;
-  }
+  if (!window.firebase || !firebase.initializeApp) return false;
   if (window.fbApp && window.fbAuth && window.fbDb) return true;
 
   const firebaseConfig = {
@@ -58,12 +61,13 @@ window.ensureFirebase = function ensureFirebase() {
     window.fbAuth = firebase.auth();
     window.fbDb = firebase.firestore();
 
-    // Ensure auth session persists on mobile Safari / in-app browsers
+    // --- IMPORTANT: persist auth session (mobile Safari / in-app browsers) ---
     try {
       if (window.fbAuth.setPersistence && firebase.auth?.Auth?.Persistence) {
         window.fbAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
       }
     } catch (_) {}
+    // -------------------------------------------------------------
 
     window.fbAuth.onAuthStateChanged((user) => window.updateAuthUI(user));
 
@@ -72,7 +76,7 @@ window.ensureFirebase = function ensureFirebase() {
     if (p === 'http:' || p === 'https:' || p === 'chrome-extension:') {
       window.fbAuth.getRedirectResult()
         .then((res) => {
-          // On some mobile browsers, redirect flow needs an explicit result handling to finalize state.
+          // Some mobile browsers need explicit result handling to finalize state
           if (res && res.user) {
             try { window.updateAuthUI(res.user); } catch (_) {}
             try { window.setAuthStatus('登录成功'); } catch (_) {}
@@ -117,11 +121,8 @@ window.updateAuthUI = function updateAuthUI(user, configMissing=false) {
 
     const isPasswordUser = user.providerData?.some(p => p.providerId === 'password');
     if (hint) {
-      if (isPasswordUser && !user.emailVerified) {
-        hint.textContent = `已登录但邮箱未验证 ⚠️（云端备份/恢复将受限）`;
-      } else {
-        hint.textContent = `Cloud ready ✅（${email || 'user'}）`;
-      }
+      if (isPasswordUser && !user.emailVerified) hint.textContent = `已登录但邮箱未验证 ⚠️（云端备份/恢复将受限）`;
+      else hint.textContent = `Cloud ready ✅（${email || 'user'}）`;
     }
     window.setAuthStatus('');
   } else {
@@ -140,20 +141,20 @@ window.authGoogle = async function authGoogle() {
   try {
     const provider = new firebase.auth.GoogleAuthProvider();
 
-    // Prefer popup; fallback to redirect if popup is blocked (common on mobile/in-app browsers)
+    // Prefer popup; fallback to redirect if blocked/unsupported
     try {
       await window.fbAuth.signInWithPopup(provider);
+      window.setAuthStatus('登录成功');
+      window.closeAuth();
+      return;
     } catch (e) {
       const msg = String(e?.message || e || '');
-      // If popup blocked/unsupported, fallback to redirect
       if (/popup|blocked|cancelled|unsupported|operation-not-supported/i.test(msg)) {
         await window.fbAuth.signInWithRedirect(provider);
         return;
       }
       throw e;
     }
-    window.setAuthStatus('登录成功');
-    window.closeAuth();
   } catch (e) {
     console.error(e);
     window.setAuthStatus(e.message || 'Google 登录失败', true);
@@ -170,7 +171,6 @@ window.authEmailSignup = async function authEmailSignup() {
   window.setAuthStatus('注册中...');
   try {
     const cred = await window.fbAuth.createUserWithEmailAndPassword(email, pass);
-
     await cred.user.sendEmailVerification();
 
     window.setAuthStatus('注册成功：已发送验证邮件，请先验证邮箱', false);
@@ -227,7 +227,7 @@ window.authLogout = async function authLogout() {
   }
 };
 
-// Cloud helpers
+// ===== Cloud helpers =====
 function normalizeEvents(events) {
   const safe = Array.isArray(events) ? events : [];
   return safe.map(e => ({
@@ -264,17 +264,59 @@ function backupLocalBeforeRestore() {
   }
 }
 
+// ---- Warm-up helpers: fix first-try "offline" ----
+async function waitForAuthReady(timeoutMs = 4000) {
+  try {
+    if (!window.fbAuth || typeof window.fbAuth.onAuthStateChanged !== 'function') return;
+    if (window.fbAuth.currentUser) { await Promise.resolve(); return; }
+
+    await new Promise((resolve) => {
+      let done = false;
+      const t = setTimeout(() => { if (!done) { done = true; try { unsub && unsub(); } catch(_) {} resolve(); } }, timeoutMs);
+      const unsub = window.fbAuth.onAuthStateChanged(() => {
+        if (done) return;
+        done = true;
+        clearTimeout(t);
+        try { unsub && unsub(); } catch(_) {}
+        resolve();
+      });
+    });
+  } catch (_) {}
+}
+
+async function warmFirestore(db, attempts = 3) {
+  if (!db) return { ok: false, lastErr: null };
+
+  try { if (typeof db.enableNetwork === 'function') await db.enableNetwork(); } catch (_) {}
+
+  let lastErr = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      // Lightweight read to force establishing a connection
+      await db.collection('_ping').doc('_ping').get();
+      return { ok: true, lastErr: null };
+    } catch (e) {
+      lastErr = e;
+      const msg = String(e?.message || e || '');
+      // retry on offline-ish errors
+      if (i < attempts - 1 && (/offline|unavailable|network/i).test(msg)) {
+        await new Promise(r => setTimeout(r, 300));
+        continue;
+      }
+      break;
+    }
+  }
+  return { ok: false, lastErr };
+}
+// ---- /Warm-up helpers ----
+
 async function requireVerifiedEmailForCloud(user, actionLabel = '云端操作') {
-  // Only enforce for Email/Password accounts
   const isPasswordUser = user?.providerData?.some(p => p.providerId === 'password');
   if (!isPasswordUser) return true;
 
-  // Ensure freshest auth state
   try { await user.reload(); } catch (_) {}
-
   if (user.emailVerified) return true;
 
-  // iOS-style dialog flow
   await (window.uiAlert
     ? window.uiAlert(`你的邮箱尚未验证。\n\n为了使用${actionLabel}（备份/恢复），请先完成邮箱验证。`, '需要邮箱验证')
     : Promise.resolve());
@@ -291,7 +333,6 @@ async function requireVerifiedEmailForCloud(user, actionLabel = '云端操作') 
   if (!resend) return false;
 
   try {
-    // Cooldown to avoid triggering Firebase rate limits
     const key = 'email_verify_last_sent_at';
     const last = Number(localStorage.getItem(key) || '0');
     const now = Date.now();
@@ -312,7 +353,6 @@ async function requireVerifiedEmailForCloud(user, actionLabel = '云端操作') 
     return false;
   }
 
-  // Offer a "I've verified" refresh
   const recheck = window.uiConfirm
     ? await window.uiConfirm(
         '你是否已经完成邮箱验证？\n\n点击“已验证”我会立刻重新检查状态。',
@@ -338,7 +378,11 @@ async function requireVerifiedEmailForCloud(user, actionLabel = '云端操作') 
   return false;
 }
 
-// Cloud backup/restore
+function userDocRef(user) {
+  return window.fbDb.collection('users').doc(user.uid).collection('calendar').doc('main');
+}
+
+// ===== Cloud backup/restore =====
 window.cloudBackup = async function cloudBackup() {
   if (!window.ensureFirebase()) return window.uiAlert('Firebase 未配置：请先填 firebaseConfig');
   const user = window.fbAuth.currentUser;
@@ -347,8 +391,42 @@ window.cloudBackup = async function cloudBackup() {
   if (!(await requireVerifiedEmailForCloud(user, '云端备份'))) return;
 
   try {
-    const ref = window.fbDb.collection('users').doc(user.uid).collection('calendar').doc('main');
+    // Warm-up so first action doesn't get "offline"
+    await waitForAuthReady();
+    try { await user.reload(); } catch (_) {}
+    const warm = await warmFirestore(window.fbDb);
+    if (!warm.ok) {
+      await window.uiAlert('网络尚未就绪（Firestore offline）。\n\n请检查网络后重试。\n\n' + (warm.lastErr?.message || ''), '暂时无法备份');
+      return;
+    }
+
+    const ref = userDocRef(user);
     const events = normalizeEvents(window.state?.events);
+
+    // Prevent accidental overwrite: compare with cloud first
+    let cloudInfo = null;
+    try {
+      const snap = await ref.get();
+      if (snap.exists) {
+        const data = snap.data() || {};
+        cloudInfo = {
+          count: Array.isArray(data.events) ? data.events.length : 0,
+          updatedAtText: formatMaybeTimestamp(data.updatedAt),
+        };
+      }
+    } catch (_) {}
+
+    if (cloudInfo) {
+      const ok = await window.uiConfirm(
+        `即将上传并覆盖云端数据。\n\n本地：${events.length} 件\n云端：${cloudInfo.count} 件\n` +
+        (cloudInfo.updatedAtText ? `云端更新时间：${cloudInfo.updatedAtText}\n\n` : `\n`) +
+        `确定继续“覆盖云端”吗？`,
+        '确认备份',
+        '覆盖并备份',
+        '取消'
+      );
+      if (!ok) return;
+    }
 
     const payload = {
       format: "smart_calendar_cloud",
@@ -374,7 +452,19 @@ window.cloudRestore = async function cloudRestore() {
   if (!(await requireVerifiedEmailForCloud(user, '云端恢复'))) return;
 
   try {
-    const ref = window.fbDb.collection('users').doc(user.uid).collection('calendar').doc('main');
+    // Warm-up: avoid false 'offline' on first restore
+    await waitForAuthReady();
+    try { await user.reload(); } catch (_) {}
+    const warm = await warmFirestore(window.fbDb);
+    if (!warm.ok) {
+      await window.uiAlert(
+        '网络尚未就绪（Firestore offline）。\n\n请检查网络后重试。\n\n' + (warm.lastErr?.message || ''),
+        '暂时无法恢复'
+      );
+      return;
+    }
+
+    const ref = userDocRef(user);
     const snap = await ref.get();
     if (!snap.exists) return window.uiAlert('云端没有备份数据', '无备份');
 
